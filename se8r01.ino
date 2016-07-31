@@ -9,28 +9,22 @@
 #define RPD_MODE3 5
 #define TEST_MODE 6
 
-#define RX
-
 LiquidCrystal_I2C lcd(0x27, 20, 4);
 Bounce debouncer1 = Bounce();
 Bounce debouncer2 = Bounce();
 Bounce debouncer3 = Bounce();
 
-int counter = 0;
-byte s = 0, w = 45;
-int tryes = 100;
+int counter_for_tx = 0;
+byte start_ch_for_RPD = 0, width_for_RPD2 = 45;
+int tryes_for_test_link = 100;
 
-byte mode;
+byte mode = RX_MODE;
 
 byte txData[] = { "123456" }; //must be min 4 byte (wtf??), max - 32 bytes
 const int PAYLOAD_WIDTH = sizeof(txData);
 byte rxData[PAYLOAD_WIDTH]; //size of rx must be the same as tx if not DNPL
 
 void init_radio() {
-	mode = RX_MODE;
-#ifdef TX
-	mode = TX_MODE;
-#endif
 	if (!init_rf(10, 7, 8, PAYLOAD_WIDTH)) {
 		Serial.println("Chip not found!");
 		while (1);
@@ -142,6 +136,73 @@ bool sendCommandChangeChannel(byte newCh) {
 	return result;
 }
 
+void buttons_processing() {
+
+	for (byte i = 0; i < 10; i++) {
+		debouncer1.update();
+		debouncer2.update();
+		debouncer3.update();
+		delay(10);
+	}
+
+	bool but1 = !debouncer1.read();
+	bool but2 = !debouncer2.read();
+	bool but3 = !debouncer3.read();
+
+	if (but1) {
+		if (but2) {
+			byte prevCh = readReg(REG_RF_CH);
+			scanNoise();
+			delay(3000);
+			setChannel(prevCh);
+			but2 = false;
+		} else if (but3) {
+			but3 = false;
+			lcd.setCursor(0, 0);
+			lcd.print("               ");
+			lcd.setCursor(0, 0);
+			lcd.print("RPD:");
+			lcd.print(getRpd(), DEC);
+			delay(1000);
+		} else {
+			mode++;
+			if (mode == RPD_MODE || mode == RPD_MODE2 || mode == RPD_MODE3) {
+				mode = TEST_MODE;
+			}
+			if (mode > TEST_MODE)
+				mode = 0;
+
+			if (mode != TEST_MODE)
+				printMode();
+
+			delay(500);
+		}
+	}
+
+	if (but2) {
+		byte newCh = readReg(REG_RF_CH) + 10;
+		if (newCh > 124)
+			newCh = 0;
+
+		if (sendCommandChangeChannel(newCh))
+			setChannel(newCh);
+
+		printMode();
+	}
+
+	if (but3) {
+		byte newCh = readReg(REG_RF_CH) + 1;
+		if (newCh > 124)
+			newCh = 0;
+
+		if (sendCommandChangeChannel(newCh))
+			setChannel(newCh);
+
+		printMode();
+	}
+
+}
+
 void loop() {
 
 	if (Serial.available()) {
@@ -182,13 +243,13 @@ void loop() {
 		}
 		if (command.equalsIgnoreCase("rpd2")) {
 			mode = RPD_MODE2;
-			s = param * w;
+			start_ch_for_RPD = param * width_for_RPD2;
 			changeMode(RX_MODE);
 			printMode();
 		}
 		if (command.equalsIgnoreCase("rpd3")) {
 			mode = RPD_MODE3;
-			s = param;
+			start_ch_for_RPD = param;
 			changeMode(RX_MODE);
 			printMode();
 		}
@@ -220,152 +281,101 @@ void loop() {
 		}
 		if (command.equalsIgnoreCase("ts")) {
 			mode = TEST_MODE;
-			tryes = 100;
+			tryes_for_test_link = 100;
 			if (param != 0)
-				tryes = param;
+				tryes_for_test_link = param;
 		}
 		Serial.println(" ************************");
 		if (command.equalsIgnoreCase("rpd2"))
 			printHeadRPD2();
 	}
 
-	for (byte i = 0; i < 10; i++) {
-		debouncer1.update();
-		debouncer2.update();
-		debouncer3.update();
-		delay(10);
-	}
+	buttons_processing();
 
-	bool but1 = !debouncer1.read();
-	bool but2 = !debouncer2.read();
-	bool but3 = !debouncer3.read();
+	switch (mode) {
 
-	if (but1) {
-		if (but2) {
-			byte prevCh = readReg(REG_RF_CH);
-			scanNoise();
-			delay(3000);
-			setChannel(prevCh);
-			but2 = false;
-		} else if (but3) {
-			but3 = false;
-			lcd.setCursor(0, 0);
-			lcd.print("               ");
-			lcd.setCursor(0, 0);
-			lcd.print("RPD:");
-			lcd.print(getRpd(), DEC);
-			delay(1000);
-		} else {
-			mode++;
-			if (mode == RPD_MODE || mode == RPD_MODE2 || mode == RPD_MODE3) {
-				mode = TEST_MODE;
+		case RX_MODE: {
+			byte pipe = 7;
+			pipe = getRxData(rxData);
+			if (pipe < 7) {
+				while ((getStatusReg() & 0xE) != 0xE) //while fifo not empty
+					getRxPayload(rxData, PAYLOAD_WIDTH); //reading payload from fifo to buffer
+				String strVal((char*) rxData);
+				Serial.print("Received on pipe:");
+				Serial.println(pipe);
+				Serial.println(strVal);
+				if (pipe == 1) {
+					byte newCh = (byte) strVal.toInt();
+					Serial.print("Change channel to:");
+					Serial.println(newCh);
+					setChannel(newCh);
+				}
 			}
-			if (mode > TEST_MODE)
-				mode = 0;
-			if (mode != TEST_MODE)
-				printMode();
+			break;
+		}
+
+		case TX_MODE: {
+			String(counter_for_tx).getBytes(txData, PAYLOAD_WIDTH);
+			char rtr = sendWithAck(txData);
+			if (rtr >= 0)
+				Serial.println("Success! Data packet delivered!");
+			else {
+				Serial.println(
+						"************************Fail! Data packet may be lost!********************************");
+			}
+
+			Serial.print("Rtr: ");
+			Serial.print(rtr, DEC);
+			Serial.print(" - ");
+			Serial.println((readReg(REG_OBSERVE_TX) & 0xF0) >> 4);
+
+			counter_for_tx++;
 			delay(500);
+			break;
 		}
-	}
 
-	if (but2) {
-		byte newCh = readReg(REG_RF_CH) + 10;
-		if (newCh > 124)
-			newCh = 0;
-		if (sendCommandChangeChannel(newCh))
-			setChannel(newCh);
-		printMode();
-	}
+		case RPD_MODE:
+			//Serial.println(int(getRpd()));
+			//delay(500);
+			plot(getRpd() * 10);
+			delay(100);
+			break;
 
-	if (but3) {
-		byte newCh = readReg(REG_RF_CH) + 1;
-		if (newCh > 124)
-			newCh = 0;
-		if (sendCommandChangeChannel(newCh))
-			setChannel(newCh);
-		printMode();
-	}
-
-	if (mode == RX_MODE) {
-		byte pipe = 7;
-		pipe = getRxData(rxData);
-		if (pipe < 7) {
-			while ((getStatusReg() & 0xE) != 0xE)
-				getRxPayload(rxData, PAYLOAD_WIDTH);
-			String strVal((char*) rxData);
-			Serial.print("Received on pipe:");
-			Serial.println(pipe);
-			Serial.println(strVal);
-			if (pipe == 1) {
-				byte newCh = (byte) strVal.toInt();
-				Serial.print("Change channel to:");
-				Serial.println(newCh);
-				setChannel(newCh);
+		case RPD_MODE2:
+			for (byte i = start_ch_for_RPD; i < min(start_ch_for_RPD + width_for_RPD2, 125); i++) {
+				setChannel(i);
+				delay(1);
+				char rpd = getRpd();
+				Serial.print(" ");
+				if (rpd >= 0)
+					Serial.print(" ");
+				else
+					Serial.print("-");
+				if (abs(rpd) < 10)
+					Serial.print("0");
+				Serial.print(abs(rpd));
+				if (abs(rpd) < 100)
+					Serial.print(" ");
+				Serial.print(" ");
 			}
-		}
-	}
+			Serial.println();
+			//delay(500);
+			break;
 
-	if (mode == TX_MODE) {
-		String(counter).getBytes(txData, PAYLOAD_WIDTH);
-		char rtr = sendWithAck(txData);
-		if (rtr >= 0)
-			Serial.println("Success! Data packet delivered!");
-		else {
-			Serial.println(
-					"************************Fail! Data packet may be lost!********************************");
-		}
+		case RPD_MODE3:
+			int rpds[4];
+			for (byte i = start_ch_for_RPD; i < start_ch_for_RPD + 4; i++) {
+				setChannel(i);
+				delay(1);
+				rpds[i - start_ch_for_RPD] = getRpd() * 10;
+			}
+			plot(rpds[0], rpds[1], rpds[2], rpds[3]);
+			delay(100);
 
-		Serial.print("Rtr: ");
-		Serial.print(rtr, DEC);
-		Serial.print(" - ");
-		Serial.println((readReg(REG_OBSERVE_TX) & 0xF0) >> 4);
-
-		counter++;
-		delay(500);
-	}
-
-	if (mode == RPD_MODE) {
-		//Serial.println(int(getRpd()));
-		//delay(500);
-		plot(getRpd() * 10);
-		delay(100);
-	}
-
-	if (mode == RPD_MODE2) {
-		for (byte i = s; i < min(s + w, 125); i++) {
-			setChannel(i);
-			delay(1);
-			char rpd = getRpd();
-			Serial.print(" ");
-			if (rpd >= 0)
-				Serial.print(" ");
-			else
-				Serial.print("-");
-			if (abs(rpd) < 10)
-				Serial.print("0");
-			Serial.print(abs(rpd));
-			if (abs(rpd) < 100)
-				Serial.print(" ");
-			Serial.print(" ");
-		}
-		Serial.println();
-		//delay(500);
-	}
-
-	if (mode == RPD_MODE3) {
-		int rpds[4];
-		for (byte i = s; i < s + 4; i++) {
-			setChannel(i);
-			delay(1);
-			rpds[i - s] = getRpd() * 10;
-		}
-		plot(rpds[0], rpds[1], rpds[2], rpds[3]);
-		delay(100);
-	}
-
-	if (mode == TEST_MODE) {
-		testLink();
-		delay(1000);
+		case TEST_MODE:
+			testLink();
+			delay(1000);
+			break;
 	}
 
 }
@@ -396,9 +406,9 @@ void printMode() {
 	lcd.setCursor(0, 1);
 	lcd.print("CHANNEL:");
 	if (mode == RPD_MODE3) {
-		lcd.print(s);
+		lcd.print(start_ch_for_RPD);
 		lcd.print("-");
-		lcd.print(s + 3);
+		lcd.print(start_ch_for_RPD + 3);
 	} else {
 		lcd.print(readReg(REG_RF_CH));
 		lcd.print("   ");
@@ -406,7 +416,7 @@ void printMode() {
 }
 
 void printHeadRPD2() {
-	for (byte i = s; i < min(s + w, 124); i++) {
+	for (byte i = start_ch_for_RPD; i < min(start_ch_for_RPD + width_for_RPD2, 124); i++) {
 		Serial.print("  ");
 		if (i < 10)
 			Serial.print(0);
@@ -433,26 +443,26 @@ void testLink() {
 	lcd.print("TESTING...");
 	Serial.println("TESTING...");
 	changeMode(TX_MODE);
-	for (int i = 0; i < tryes; i++) {
+	for (int i = 0; i < tryes_for_test_link; i++) {
 		if (sendWithAck(txData) >= 0)
 			suc++;
 		delay(10);
 	}
 	lcd.clear();
 	lcd.print("S:");
-	lcd.print(tryes);
+	lcd.print(tryes_for_test_link);
 	lcd.print(" ACK:");
 	lcd.print(suc);
 	lcd.setCursor(0, 1);
 	lcd.print("%:");
-	lcd.print(suc * 100 / tryes);
+	lcd.print(suc * 100 / tryes_for_test_link);
 
 	Serial.print("Send:");
-	Serial.print(tryes);
+	Serial.print(tryes_for_test_link);
 	Serial.print(" ACK:");
 	Serial.println(suc);
 	Serial.print("%:");
-	Serial.println(suc * 100 / tryes);
+	Serial.println(suc * 100 / tryes_for_test_link);
 }
 
 void printRXdata(byte* address, byte dlength) {
@@ -462,7 +472,6 @@ void printRXdata(byte* address, byte dlength) {
 	}
 	Serial.println();
 }
-
 
 void plot(int data1) {
 	plot(data1, 0, 0, 0);
