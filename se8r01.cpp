@@ -2,11 +2,27 @@
 #include <SPI.h>
 #include "se8r01.h"
 
-uint8_t CE_pin,CS_pin,IRQ_pin;
+uint8_t CE_pin, CS_pin, IRQ_pin;
+
+byte payload_width;
 
 byte pipes[][6] = { "0pipe", "1pipe", "2pipe", "3pipe", "4pipe", "5pipe" };
 
-void initPipes(byte PW);
+void initPipes() {
+	writeToReg(REG_SETUP_AW, 0x02);		//works only with 4 byte address! wtf ???
+	byte pipesEnabled = 0;
+	for (byte i = 0; i < sizeof(pipes) / 6; i++) {
+		pipesEnabled <<= 1;
+		pipesEnabled++;
+		if (i == 0)
+			writeToReg(REG_RX_ADDR_P0, pipes[i], 4);
+		else
+			writeToReg(REG_RX_ADDR_P0 + i, pipes[i][0]);
+		writeToReg(REG_RX_PW_P0 + i, payload_width);
+	}
+	writeToReg(REG_EN_RXADDR, pipesEnabled);
+	writeToReg(REG_EN_AA, pipesEnabled);
+}
 
 void writeCommand(byte command) {
 	digitalWrite(CS_pin, 0);
@@ -64,7 +80,7 @@ void changeMode(byte MODE) {
 	if (MODE != STANDBY) {
 		writeToRegMask(REG_CONFIG, MODE, 1);
 		if (MODE == RX_MODE) {
-			initPipes(readReg(REG_RX_PW_P0));
+			initPipes();
 		}
 		digitalWrite(CE_pin, 1);
 		delayMicroseconds(210);
@@ -201,40 +217,57 @@ void bank1Init(void) {
 	rf_switch_bank(BANK0);
 }
 
-void initPipes(byte PW) {
-	writeToReg(REG_SETUP_AW, 0x02);		//works only with 4 byte address! wtf ???
-	byte pipesEnabled = 0;
-	for (byte i = 0; i < sizeof(pipes) / 6; i++) {
-		pipesEnabled <<= 1;
-		pipesEnabled++;
-		if (i == 0)
-			writeToReg(REG_RX_ADDR_P0, pipes[i], 4);
-		else
-			writeToReg(REG_RX_ADDR_P0 + i, pipes[i][0]);
-		writeToReg(REG_RX_PW_P0 + i, PW);
-	}
-	writeToReg(REG_EN_RXADDR, pipesEnabled);
-	writeToReg(REG_EN_AA, pipesEnabled);
-}
-
 boolean init_rf(uint8_t _CS_pin, uint8_t _CE_pin, uint8_t _IRQ_pin, byte payloadWidth) {
 	boolean result = false;
-	CS_pin=_CS_pin;
-	CE_pin=_CE_pin;
-	IRQ_pin=_IRQ_pin;
+	CS_pin = _CS_pin;
+	CE_pin = _CE_pin;
+	IRQ_pin = _IRQ_pin;
+	pinMode(IRQ_pin, INPUT_PULLUP);
+	pinMode(CE_pin, OUTPUT);
+	payload_width = payloadWidth;
 	delay(150);							//SE8R01 power on reset delay
 	SPI.begin();
 	if (checkChip()) {
-		pinMode(IRQ_pin, INPUT_PULLUP);
-		pinMode(CE_pin, OUTPUT);
 		digitalWrite(CE_pin, 0);			//stand-by 1 mode
 		bank1Init();
-		initPipes(payloadWidth);
-		writeToRegMask(REG_STATUS, IRQ_RX |IRQ_TX | IRQ_MAX_RT, IRQ_TX | IRQ_MAX_RT); //clear interrupts
-		//writeToReg(REG_CONFIG, 0x0B);	//power up, RX-mode, enable CRC, CRC - 1 byte, enable all interrupts
+		initPipes();
+		writeToRegMask(REG_STATUS, IRQ_RX | IRQ_TX | IRQ_MAX_RT, IRQ_TX | IRQ_MAX_RT); //clear interrupts
 		writeToReg(REG_CONFIG, 0x0F);	//power up, RX-mode, enable CRC, CRC - 2 byte, enable all interrupts
 		delayMicroseconds(150);			//power up delay
 		result = true;
 	}
 	return result;
+}
+
+//returns number of retransmits if succeed, or -1 if failed to get ACK
+char sendWithAck(byte *address) {
+	char rtr = -1;
+	writeToRegMask(REG_STATUS, IRQ_TX | IRQ_MAX_RT, IRQ_TX | IRQ_MAX_RT); //clear TX interrupts
+	pushTxPayload(address, payload_width);
+	digitalWrite(CE_pin, 0); //!must set 0 to prevent resend packets if fifo will not be empty !(if lose packet)
+	while (digitalRead(IRQ_pin) != LOW);
+	byte status = getStatusReg();
+	if (status & IRQ_TX)
+		rtr = readReg(REG_OBSERVE_TX) & 0x0F;
+	else if (status & IRQ_MAX_RT) {
+		writeCommand(CMD_FLUSH_TX); //so as fifo is not empty in this case, flush it
+		rtr = -1;
+	}
+	digitalWrite(CE_pin, 1);
+	delayMicroseconds(210);
+	return rtr;
+}
+
+//returns pipe number of received data, or 7 if no data
+byte getRxData(byte *address) {
+	byte pipe = 7;
+	if (digitalRead(IRQ_pin) == LOW) {
+		byte status = getStatusReg();
+		if (status & IRQ_RX) {
+			getRxPayload(address, payload_width);
+			writeToRegMask(REG_STATUS, IRQ_RX, IRQ_RX);  //clear RX interrupt
+			pipe = (status & 0x0E) >> 1;
+		}
+	}
+	return pipe;
 }

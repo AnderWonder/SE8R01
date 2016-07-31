@@ -9,6 +9,8 @@
 #define RPD_MODE3 5
 #define TEST_MODE 6
 
+#define RX
+
 LiquidCrystal_I2C lcd(0x27, 20, 4);
 Bounce debouncer1 = Bounce();
 Bounce debouncer2 = Bounce();
@@ -20,55 +22,54 @@ int tryes = 100;
 
 byte mode;
 
-byte txData[] = { "123456" }; //min 4 byte, wtf?? up to 32 bytes
+byte txData[] = { "123456" }; //must be min 4 byte (wtf??), max - 32 bytes
 const int PAYLOAD_WIDTH = sizeof(txData);
 byte rxData[PAYLOAD_WIDTH]; //size of rx must be the same as tx if not DNPL
 
-void setup() {
-	pinMode(2, INPUT_PULLUP);
-	pinMode(3, INPUT_PULLUP);
-	pinMode(4, INPUT_PULLUP);
-
-	debouncer1.attach(2);
-	debouncer1.interval(5); // interval in ms
-
-	debouncer2.attach(3);
-	debouncer2.interval(5); // interval in ms
-
-	debouncer3.attach(4);
-	debouncer3.interval(5); // interval in ms
-
-	Serial.begin(9600);
-	lcd.init();
-	lcd.backlight();
-
-	mode = TX_MODE;
+void init_radio() {
 	mode = RX_MODE;
-
-	if (!init_rf(10,7,8,PAYLOAD_WIDTH)) {
+#ifdef TX
+	mode = TX_MODE;
+#endif
+	if (!init_rf(10, 7, 8, PAYLOAD_WIDTH)) {
 		Serial.println("Chip not found!");
 		while (1);
+
 	}
-
 	setPower(POWER_5dbm);
-
 	selectTxPipe(0);
-
 	setRtr(15);
-
 	changeMode(mode);
-
 	Serial.setTimeout(100);
 	Serial.println("********************** Radio starting *******************");
 	Serial.print("************************ ");
 	printMode();
 	Serial.println(" ************************");
+}
 
-	//Serial.println(readReg(REG_CONFIG),HEX);
+void init_buttons() {
+	pinMode(2, INPUT_PULLUP);
+	pinMode(3, INPUT_PULLUP);
+	pinMode(4, INPUT_PULLUP);
+	debouncer1.attach(2);
+	debouncer1.interval(5); // interval in ms
+	debouncer2.attach(3);
+	debouncer2.interval(5); // interval in ms
+	debouncer3.attach(4);
+	debouncer3.interval(5); // interval in ms
+}
 
-	//readReg(REG_RX_ADDR_P0,rxData,4);
-	//Serial.println((char*)rxData);
-	//printRXdata(rxData,4);
+void setup() {
+
+	init_buttons();
+
+	Serial.begin(9600);
+
+	lcd.init();
+	lcd.backlight();
+
+	init_radio();
+
 }
 
 void scanNoise() {
@@ -247,15 +248,14 @@ void loop() {
 			setChannel(prevCh);
 			but2 = false;
 		} else if (but3) {
-			but3=false;
-			lcd.setCursor(0,0);
+			but3 = false;
+			lcd.setCursor(0, 0);
 			lcd.print("               ");
-			lcd.setCursor(0,0);
+			lcd.setCursor(0, 0);
 			lcd.print("RPD:");
-			lcd.print(getRpd(),DEC);
+			lcd.print(getRpd(), DEC);
 			delay(1000);
-		}
-		else {
+		} else {
 			mode++;
 			if (mode == RPD_MODE || mode == RPD_MODE2 || mode == RPD_MODE3) {
 				mode = TEST_MODE;
@@ -455,39 +455,6 @@ void testLink() {
 	Serial.println(suc * 100 / tryes);
 }
 
-//returns number of retransmits if succeed, or -1 if failed to get ACK
-char sendWithAck(byte *address) {
-	char rtr = -1;
-	writeToRegMask(REG_STATUS, IRQ_TX | IRQ_MAX_RT, IRQ_TX | IRQ_MAX_RT); //clear TX interrupts
-	pushTxPayload(address, PAYLOAD_WIDTH);
-	digitalWrite(CE_pin, 0); //!must set 0 to prevent resend packets if fifo will not be empty !(if lose packet)
-	while (digitalRead(IRQ_pin) != LOW);
-	byte status = getStatusReg();
-	if (status & IRQ_TX)
-		rtr = readReg(REG_OBSERVE_TX) & 0x0F;
-	else if (status & IRQ_MAX_RT) {
-		writeCommand(CMD_FLUSH_TX); //so as fifo is not empty in this case, flush it
-		rtr = -1;
-	}
-	digitalWrite(CE_pin, 1);
-	delayMicroseconds(210);
-	return rtr;
-}
-
-//returns pipe number of received data, or 7 if no data
-byte getRxData(byte *address) {
-	byte pipe = 7;
-	if (digitalRead(IRQ_pin) == LOW) {
-		byte status = getStatusReg();
-		if (status & IRQ_RX) {
-			getRxPayload(address, PAYLOAD_WIDTH);
-			writeToRegMask(REG_STATUS, IRQ_RX, IRQ_RX);  //clear RX interrupt
-			pipe = (status & 0x0E) >> 1;
-		}
-	}
-	return pipe;
-}
-
 void printRXdata(byte* address, byte dlength) {
 	for (byte i = 0; i < dlength; i++) {
 		Serial.print(address[i], HEX);
@@ -495,6 +462,7 @@ void printRXdata(byte* address, byte dlength) {
 	}
 	Serial.println();
 }
+
 
 void plot(int data1) {
 	plot(data1, 0, 0, 0);
@@ -504,8 +472,8 @@ void plot(int data1, int data2, int data3, int data4) {
 	int pktSize;
 	int buffer[20];
 
-	buffer[0] = 0xCDAB;    //SimPlot packet header. Indicates start of data packet
-	buffer[1] = 4 * sizeof(int); //Size of data in bytes. Does not include the header and size fields
+	buffer[0] = 0xCDAB;    				//SimPlot packet header. Indicates start of data packet
+	buffer[1] = 4 * sizeof(int); 	//Size of data in bytes. Does not include the header and size fields
 	buffer[2] = data1;
 	buffer[3] = data2;
 	buffer[4] = data3;
@@ -513,6 +481,5 @@ void plot(int data1, int data2, int data3, int data4) {
 
 	pktSize = 2 + 2 + (4 * sizeof(int)); //Header bytes + size field bytes + data
 
-//IMPORTANT: Change to serial port that is connected to PC
 	Serial.write((uint8_t *) buffer, pktSize);
 }
