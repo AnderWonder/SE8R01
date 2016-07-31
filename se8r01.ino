@@ -1,4 +1,4 @@
-#include <arduino.h>
+#include <Arduino.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <Bounce2.h>
@@ -45,7 +45,7 @@ void setup() {
 	mode = TX_MODE;
 	mode = RX_MODE;
 
-	if (!init_rf(PAYLOAD_WIDTH)) {
+	if (!init_rf(10,7,8,PAYLOAD_WIDTH)) {
 		Serial.println("Chip not found!");
 		while (1);
 	}
@@ -460,8 +460,8 @@ char sendWithAck(byte *address) {
 	char rtr = -1;
 	writeToRegMask(REG_STATUS, IRQ_TX | IRQ_MAX_RT, IRQ_TX | IRQ_MAX_RT); //clear TX interrupts
 	pushTxPayload(address, PAYLOAD_WIDTH);
-	digitalWrite(CEq, 0); //!must set 0 to prevent resend packets if fifo will not be empty !(if lose packet)
-	while (digitalRead(IRQq) != LOW);
+	digitalWrite(CE_pin, 0); //!must set 0 to prevent resend packets if fifo will not be empty !(if lose packet)
+	while (digitalRead(IRQ_pin) != LOW);
 	byte status = getStatusReg();
 	if (status & IRQ_TX)
 		rtr = readReg(REG_OBSERVE_TX) & 0x0F;
@@ -469,7 +469,7 @@ char sendWithAck(byte *address) {
 		writeCommand(CMD_FLUSH_TX); //so as fifo is not empty in this case, flush it
 		rtr = -1;
 	}
-	digitalWrite(CEq, 1);
+	digitalWrite(CE_pin, 1);
 	delayMicroseconds(210);
 	return rtr;
 }
@@ -477,7 +477,7 @@ char sendWithAck(byte *address) {
 //returns pipe number of received data, or 7 if no data
 byte getRxData(byte *address) {
 	byte pipe = 7;
-	if (digitalRead(IRQq) == LOW) {
+	if (digitalRead(IRQ_pin) == LOW) {
 		byte status = getStatusReg();
 		if (status & IRQ_RX) {
 			getRxPayload(address, PAYLOAD_WIDTH);

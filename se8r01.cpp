@@ -2,30 +2,32 @@
 #include <SPI.h>
 #include "se8r01.h"
 
+uint8_t CE_pin,CS_pin,IRQ_pin;
+
 byte pipes[][6] = { "0pipe", "1pipe", "2pipe", "3pipe", "4pipe", "5pipe" };
 
 void initPipes(byte PW);
 
 void writeCommand(byte command) {
-	digitalWrite(CSNq, 0);
+	digitalWrite(CS_pin, 0);
 	SPI.transfer(command);
-	digitalWrite(CSNq, 1);
+	digitalWrite(CS_pin, 1);
 }
 
 void writeToReg(byte reg, byte val) {
-	digitalWrite(CSNq, 0);
+	digitalWrite(CS_pin, 0);
 	SPI.transfer(CMD_WRITE_REG | reg);
 	SPI.transfer(val);
-	digitalWrite(CSNq, 1);
+	digitalWrite(CS_pin, 1);
 }
 
 void writeToReg(byte reg, byte *addr, byte dataSize) {
-	digitalWrite(CSNq, 0);
+	digitalWrite(CS_pin, 0);
 	SPI.transfer(CMD_WRITE_REG | reg);
 	for (byte i = 0; i < dataSize; i++) {
 		SPI.transfer(*addr++);
 	}
-	digitalWrite(CSNq, 1);
+	digitalWrite(CS_pin, 1);
 }
 
 void writeToRegMask(byte reg, byte val, byte mask) {
@@ -36,91 +38,91 @@ void writeToRegMask(byte reg, byte val, byte mask) {
 }
 
 byte readReg(byte reg) {
-	digitalWrite(CSNq, 0);
+	digitalWrite(CS_pin, 0);
 	SPI.transfer(CMD_READ_REG & reg);
 	byte val = SPI.transfer(0);
-	digitalWrite(CSNq, 1);
+	digitalWrite(CS_pin, 1);
 	return val;
 }
 
 void readReg(byte reg, byte *addr, byte dataSize) {
-	digitalWrite(CSNq, 0);
+	digitalWrite(CS_pin, 0);
 	SPI.transfer(CMD_READ_REG & reg);
 	SPI.transfer(addr, dataSize);
-	digitalWrite(CSNq, 1);
+	digitalWrite(CS_pin, 1);
 }
 
 byte getStatusReg() {
-	digitalWrite(CSNq, 0);
+	digitalWrite(CS_pin, 0);
 	byte val = SPI.transfer(CMD_NOP);
-	digitalWrite(CSNq, 1);
+	digitalWrite(CS_pin, 1);
 	return val;
 }
 
 void changeMode(byte MODE) {
-	digitalWrite(CEq, 0);
+	digitalWrite(CE_pin, 0);
 	if (MODE != STANDBY) {
 		writeToRegMask(REG_CONFIG, MODE, 1);
 		if (MODE == RX_MODE) {
 			initPipes(readReg(REG_RX_PW_P0));
 		}
-		digitalWrite(CEq, 1);
+		digitalWrite(CE_pin, 1);
 		delayMicroseconds(210);
 	}
 }
 
-void getRxPayload(byte *address, byte width) {
-	digitalWrite(CSNq, 0);
+void getRxPayload(byte *addr, byte width) {
+	digitalWrite(CS_pin, 0);
 	SPI.transfer(CMD_RD_RX_PLOAD);
-	SPI.transfer(address, width);
-	digitalWrite(CSNq, 1);
+	SPI.transfer(addr, width);
+	digitalWrite(CS_pin, 1);
 }
 
 void pushTxPayload(byte *addr, byte dataSize) {
-	digitalWrite(CSNq, 0);
+	digitalWrite(CS_pin, 0);
 	SPI.transfer(CMD_WR_TX_PLOAD);
 	for (byte i = 0; i < dataSize; i++) {
 		SPI.transfer(addr[i]);
 	}
-	digitalWrite(CSNq, 1);
+	digitalWrite(CS_pin, 1);
 }
 
 void selectTxPipe(byte pipe) {
-	digitalWrite(CEq, 0);
+	digitalWrite(CE_pin, 0);
 	writeToReg(REG_TX_ADDR, pipes[pipe], 4);
 	//changing address for 0pipe, to enable ACK
 	writeToReg(REG_RX_ADDR_P0 + pipe, readReg(REG_RX_ADDR_P0));	//pipe exchange to prevent duplicate
 	writeToReg(REG_RX_ADDR_P0, pipes[pipe], 4);
-	digitalWrite(CEq, 1);
+	digitalWrite(CE_pin, 1);
 	delayMicroseconds(210);
 }
 
 void setPower(byte power) {
-	digitalWrite(CEq, 0);							//go to standby mode
+	digitalWrite(CE_pin, 0);							//go to standby mode
 	writeToRegMask(REG_RF_SETUP, power, 0x47);
-	digitalWrite(CEq, 1);							//come back to working mode
+	digitalWrite(CE_pin, 1);							//come back to working mode
 	delayMicroseconds(210);							//waiting for change mode
 }
 
 //works 2Mbps mode only
 void setRfSpeed(byte rFspeed) {
-	digitalWrite(CEq, 0);							//go to standby mode
+	digitalWrite(CE_pin, 0);							//go to standby mode
 	writeToRegMask(REG_RF_SETUP, rFspeed, 0x28);
-	digitalWrite(CEq, 1);							//come back to working mode
+	digitalWrite(CE_pin, 1);							//come back to working mode
 	delayMicroseconds(210);							//waiting for change mode
 }
 
 void setRtr(byte rtr) {
-	digitalWrite(CEq, 0);							//go to standby mode
+	digitalWrite(CE_pin, 0);							//go to standby mode
 	writeToRegMask(REG_SETUP_RETR, rtr, 0x0F);
-	digitalWrite(CEq, 1);							//come back to working mode
+	digitalWrite(CE_pin, 1);							//come back to working mode
 	delayMicroseconds(210);							//waiting for change mode
 }
 
 void setChannel(byte ch) {
-	digitalWrite(CEq, 0);							//go to standby mode
+	digitalWrite(CE_pin, 0);							//go to standby mode
 	writeToReg(REG_RF_CH, ch);
-	digitalWrite(CEq, 1);							//come back to working mode
+	digitalWrite(CE_pin, 1);							//come back to working mode
 	delayMicroseconds(210);							//waiting for change mode
 }
 
@@ -138,26 +140,13 @@ boolean checkChip(void) {
 	return res;
 }
 
-void rf_switch_bank(byte bank);
-void bank1Init(void);
-
-boolean init_rf(byte payloadWidth) {
-	boolean result = false;
-	delay(150);							//SE8R01 power on reset delay
-	SPI.begin();
-	if (checkChip()) {
-		pinMode(IRQq, INPUT_PULLUP);
-		pinMode(CEq, OUTPUT);
-		digitalWrite(CEq, 0);			//stand-by 1 mode
-		bank1Init();
-		initPipes(payloadWidth);
-		writeToRegMask(REG_STATUS, IRQ_RX |IRQ_TX | IRQ_MAX_RT, IRQ_TX | IRQ_MAX_RT); //clear interrupts
-		//writeToReg(REG_CONFIG, 0x0B);	//power up, RX-mode, enable CRC, CRC - 1 byte, enable all interrupts
-		writeToReg(REG_CONFIG, 0x0F);	//power up, RX-mode, enable CRC, CRC - 2 byte, enable all interrupts
-		delayMicroseconds(150);			//power up delay
-		result = true;
+void rf_switch_bank(byte bank) {
+	if ((getStatusReg() & 0x80) != bank) {
+		digitalWrite(CS_pin, 0);
+		SPI.transfer(0x50);			//command is not documented in datasheet
+		SPI.transfer(0x53);			//command is not documented in datasheet
+		digitalWrite(CS_pin, 1);
 	}
-	return result;
 }
 
 void bank1Init(void) {
@@ -212,15 +201,6 @@ void bank1Init(void) {
 	rf_switch_bank(BANK0);
 }
 
-void rf_switch_bank(byte bank) {
-	if ((getStatusReg() & 0x80) != bank) {
-		digitalWrite(CSNq, 0);
-		SPI.transfer(0x50);			//command is not documented in datasheet
-		SPI.transfer(0x53);			//command is not documented in datasheet
-		digitalWrite(CSNq, 1);
-	}
-}
-
 void initPipes(byte PW) {
 	writeToReg(REG_SETUP_AW, 0x02);		//works only with 4 byte address! wtf ???
 	byte pipesEnabled = 0;
@@ -237,3 +217,24 @@ void initPipes(byte PW) {
 	writeToReg(REG_EN_AA, pipesEnabled);
 }
 
+boolean init_rf(uint8_t _CS_pin, uint8_t _CE_pin, uint8_t _IRQ_pin, byte payloadWidth) {
+	boolean result = false;
+	CS_pin=_CS_pin;
+	CE_pin=_CE_pin;
+	IRQ_pin=_IRQ_pin;
+	delay(150);							//SE8R01 power on reset delay
+	SPI.begin();
+	if (checkChip()) {
+		pinMode(IRQ_pin, INPUT_PULLUP);
+		pinMode(CE_pin, OUTPUT);
+		digitalWrite(CE_pin, 0);			//stand-by 1 mode
+		bank1Init();
+		initPipes(payloadWidth);
+		writeToRegMask(REG_STATUS, IRQ_RX |IRQ_TX | IRQ_MAX_RT, IRQ_TX | IRQ_MAX_RT); //clear interrupts
+		//writeToReg(REG_CONFIG, 0x0B);	//power up, RX-mode, enable CRC, CRC - 1 byte, enable all interrupts
+		writeToReg(REG_CONFIG, 0x0F);	//power up, RX-mode, enable CRC, CRC - 2 byte, enable all interrupts
+		delayMicroseconds(150);			//power up delay
+		result = true;
+	}
+	return result;
+}

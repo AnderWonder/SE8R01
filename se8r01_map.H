@@ -10,7 +10,7 @@
 #define CMD_FLUSH_TX        		0xE1  //		1110 0001 Define flush TX register command
 #define CMD_FLUSH_RX        		0xE2  //		1110 0010 Define flush RX register command
 #define CMD_REUSE_TX_PL     		0xE3  //		1110 0011 Define reuse TX payload register command
-#define CMD_W_TX_PAYLOAD_NOACK		0xB0  //		1011 0000
+#define CMD_W_TX_PAYLOAD_NOACK	0xB0  //		1011 0000
 #define CMD_W_ACK_PAYLOAD   		0xA8  //		1010 1xxx
 #define CMD_ACTIVATE        		0x50  //		0101 0000
 #define CMD_R_RX_PL_WID     		0x60  //		0110 0000
