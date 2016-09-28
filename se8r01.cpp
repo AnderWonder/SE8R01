@@ -1,11 +1,10 @@
-#include <arduino.h>
 #include <SPI.h>
 #include "se8r01.h"
 
 uint8_t CE_pin, CS_pin, IRQ_pin;
 
 byte payload_width;
-
+byte rf_speed = SPEED_500Kbps;
 byte pipes[][6] = { "0pipe", "1pipe", "2pipe", "3pipe", "4pipe", "5pipe" };
 
 void initPipes() {
@@ -120,14 +119,6 @@ void setPower(byte power) {
 	delayMicroseconds(210);							//waiting for change mode
 }
 
-//works 2Mbps mode only
-void setRfSpeed(byte rFspeed) {
-	digitalWrite(CE_pin, 0);							//go to standby mode
-	writeToRegMask(REG_RF_SETUP, rFspeed, 0x28);
-	digitalWrite(CE_pin, 1);							//come back to working mode
-	delayMicroseconds(210);							//waiting for change mode
-}
-
 void setRtr(byte rtr) {
 	digitalWrite(CE_pin, 0);							//go to standby mode
 	writeToRegMask(REG_SETUP_RETR, rtr, 0x0F);
@@ -166,19 +157,45 @@ void rf_switch_bank(byte bank) {
 }
 
 void bank1Init(void) {
+
+        rf_switch_bank(BANK0);
+	writeToReg(REG_CONFIG, 0x03);
+	writeToReg(REG_RF_CH, 0x32);
+	if (rf_speed == SPEED_2Mbps) {
+		writeToReg(REG_RF_SETUP, 0x48);
+	} else if (rf_speed == SPEED_1Mbps) {
+		writeToReg(REG_RF_SETUP, 0x40);
+	} else {
+		writeToReg(REG_RF_SETUP, 0x68);
+	}
+	writeToReg(REG_PRE_GURD, 0x77);
+
+
 	rf_switch_bank(BANK1);
 
 	//repeat, but necessary
 	byte p1[] = { 0x40, 0x00, 0x10, 0xE6 };
+        if ( rf_speed != SPEED_2Mbps ) {
+		p1[3] = 0xE4;
+	}
 	writeToReg(REG_PLL_CTL0, p1, sizeof(p1));
+
 	byte p2[] = { 0x20, 0x08, 0x50, 0x40, 0x50 };
 	writeToReg(REG_CAL_CTL, p2, sizeof(p2));
 
+
 	byte p3[] = { 0x00, 0x00, 0x1E };
+	if ( rf_speed != SPEED_2Mbps ) {
+		p3[2] = 0x1F;
+	}
 	writeToReg(REG_IF_FREQ, p3, sizeof(p3));
 
 	//repeat, but necessary
-	writeToReg(REG_FDEV, 0x29);
+	if ( rf_speed == SPEED_2Mbps ) {
+		writeToReg(REG_FDEV, 0x29);
+	} else {
+		writeToReg(REG_FDEV, 0x14);
+	}
 
 	writeToReg(REG_DAC_CAL_LOW, 0x00);
 
@@ -192,12 +209,38 @@ void bank1Init(void) {
 	byte p5[] = { 0x97, 0x64, 0x00, 0x81 };
 	writeToReg(REG_RF_IVGEN, p5, sizeof(p5));
 
+	rf_switch_bank(BANK0);
+
+	digitalWrite(CE_pin, 1);
+        delayMicroseconds(30);
+	digitalWrite(CE_pin, 0);
+	delay(50); // delay 50ms waitting for calibaration.
+	
+	digitalWrite(CE_pin, 1);
+        delayMicroseconds(30);
+	digitalWrite(CE_pin, 0);
+	delay(50); // delay 50ms waitting for calibaration.
+
+	byte p5b[] = { 0x28, 0x32, 0x80, 0x90, 0x00 };
+	writeToReg(REG_SETUP_VALUE, p2, sizeof(p5b));
+	delay(2);
+
+	rf_switch_bank(BANK1);
+
 	byte p6[] = { 0x40, 0x01, 0x30, 0xE2 };
+	if ( rf_speed != SPEED_2Mbps ) {
+		p6[3] = 0xE0;
+	}
 	writeToReg(REG_PLL_CTL0, p6, sizeof(p6));
+
 	byte p7[] = { 0x29, 0x89, 0x55, 0x40, 0x50 };
 	writeToReg(REG_CAL_CTL, p7, sizeof(p7));
 
-	writeToReg(REG_FDEV, 0x29);
+	if ( rf_speed == SPEED_2Mbps ) {
+		writeToReg(REG_FDEV, 0x29);
+	} else {
+		writeToReg(REG_FDEV, 0x14);
+	}
 
 	byte p8[] = { 0x55, 0xC2, 0x09, 0xAC };
 	writeToReg(REG_RX_CTRL, p8, sizeof(p8));
@@ -213,8 +256,18 @@ void bank1Init(void) {
 
 	byte p12[] = { 0x2A, 0x04, 0x00, 0x7D };
 	writeToReg(REG_TEST_PKDET, p12, sizeof(p12));
-
+	
 	rf_switch_bank(BANK0);
+
+	if (rf_speed == SPEED_2Mbps) { 
+		writeToReg(REG_RF_SETUP, B01001111); //2MHz,+5dbm
+	} else if (rf_speed == SPEED_1Mbps) { 
+		writeToReg(REG_RF_SETUP, B01000111); //1MHz,+5dbm
+	} else {
+		writeToReg(REG_RF_SETUP, B01101111); //500K,+5dbm
+	}
+
+	
 }
 
 boolean init_rf(uint8_t _CS_pin, uint8_t _CE_pin, uint8_t _IRQ_pin, byte payloadWidth) {
@@ -257,6 +310,7 @@ char sendWithAck(byte *address) {
 	delayMicroseconds(210);
 	return rtr;
 }
+
 
 //returns pipe number of received data, or 7 if no data
 byte getRxData(byte *address) {

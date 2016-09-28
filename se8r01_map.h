@@ -47,8 +47,6 @@
 #define REG_SETUP_VALUE   			0x1E                                                           
 #define REG_PRE_GURD      			0x1F
 
-//SE8R01 BANK1 register - not described in datasheet
-
 #define REG_LINE          			0x00  
 #define REG_PLL_CTL0      			0x01  
 #define REG_PLL_CTL1      			0x02  
@@ -56,7 +54,7 @@
 #define REG_A_CNT_REG     			0x04  
 #define REG_B_CNT_REG     			0x05  
 #define REG_RESERVED0     			0x06  
-#define BANK1_REG_STATUS  			0x07  
+#define REG_STATUS        			0x07
 #define REG_STATE         			0x08  
 #define REG_CHAN          			0x09  
 #define REG_IF_FREQ       			0x0A  
@@ -86,7 +84,7 @@
 
 #define IRQ_RX	  	         		0x40 
 #define IRQ_TX  	  	       		0x20 
-#define IRQ_MAX_RT          		0x10 
+#define IRQ_MAX_RT          			0x10 
 
 //FIFO status
 

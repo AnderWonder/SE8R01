@@ -41,6 +41,8 @@ void setChannel(byte ch);
 
 void setPower(byte power);
 
+void setRfSpeed(byte rFspeed);
+
 byte getStatusReg();
 
 //sets the number of retransmits for transmitted package to get ACK (max 15)
